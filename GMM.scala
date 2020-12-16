@@ -66,6 +66,7 @@ object GMM extends App {
     val mean: Double = X.mean()
     val variance: Double = X.variance()
     val datasetVariance: Array[Double] = Array.fill(K)(variance)
+    val test_datasetVariance: Array[Double] = Array.fill(K)(0.0) //test variable
     val datasetWeights: Array[Double] = Array.fill(K)(1.0/K)
     val test_datasetWeights: Array[Double] = Array.fill(K)(0.0) //test variable
     val datasetMean: Array[Double] = X.takeSample(withReplacement = true, K, seed = 3)
@@ -81,37 +82,67 @@ object GMM extends App {
       acc + log(partial)
     }
     var lnp: Double = X.aggregate(0.0)(logJointProbability,_+_)
+    var cLnp: Double = 0.0
+    var count = 0
 
-    /**
-     * Step: Expectation
-     */
+    //debug prints
+    println("total count: ",totalCount)
+    println("dataset mean: ", mean)
+    println("dataset variance: ", variance)
+    println("Array: Samples for mean: ")
+    datasetMean.foreach(println)
+    println("Array: Initial weights: ")
+    datasetWeights.foreach(println)
+    println("Array:: dataset variance ")
+    datasetVariance.foreach(println)
+    println("logtest: ", lnp)
+    println("epsilon:", epsilon)
 
-    // Gamma:RDD[Array[Double]] will contain K+1 elements, the first K elements contain the likelihood (ynk) the last element contains the data point from the X:RDD[double]
-    val gamma: RDD[Array[Double]] = X.map(r => {
-      val tempArray:Array[Double] = Array.fill(K+1)(0.0) // Temp Array of size k
-      val divisor:Double = kSumLogLikelihood(K, r, datasetWeights, datasetVariance, datasetMean) // Sum of the loglikelihood for each value of K
+
+    do {
+
+      /**
+       * Step: Expectation
+       */
+
+      // Gamma:RDD[Array[Double]] will contain K+1 elements, the first K elements contain the likelihood (ynk) the last element contains the data point from the X:RDD[double]
+      val gamma: RDD[Array[Double]] = X.map(r => {
+        val tempArray: Array[Double] = Array.fill(K + 1)(0.0) // Temp Array of size K
+        val divisor: Double = kSumLogLikelihood(K, r, datasetWeights, datasetVariance, datasetMean) // Sum of the loglikelihood for each value of K
+        for (k <- 0 to K - 1) {
+          tempArray(k) = (datasetWeights(k) * pdf(r, sqrt(datasetVariance(k)), datasetMean(k))) / divisor
+        }
+        tempArray(K) = r
+        tempArray
+      }).persist() // need to persist? persist here caused? to mantain the same values.
+      //var test = gamma.collect().take(1).toList
+
+      /**
+       * Step: Maximization
+       */
+
       for (k <- 0 to K - 1) {
-        tempArray(k) = (datasetWeights(k) * pdf(r, sqrt(datasetVariance(k)), datasetMean(k))) / divisor
+        val sumLikelihoods = gamma.aggregate(0.0)((acc: Double, v: Array[Double]) => acc + v(k), _ + _)
+        // Update datasetWeights array.
+        datasetWeights(k) = sumLikelihoods / totalCount
+        // Update datasetMean array.
+        datasetMean(k) = (gamma.aggregate((0.0))((acc: Double, v: Array[Double]) => acc + v(k) * v(K), _ + _)) / sumLikelihoods
+        // Update datasetVariance array.
+        datasetVariance(k) = (gamma.aggregate(0.0)((acc: Double, v: Array[Double]) => acc + v(k) * pow((v(K) - datasetMean(k)), 2), _ + _)) / sumLikelihoods
       }
-      tempArray(K) = r
-      tempArray
-    }) // hard implementation, need to persist? persist here causes to mantain the same values.
-    var test = gamma.collect().take(1).toList
 
-    /**
-    * Step: Maximization
-    */
+      /**
+       * Step: Convergence Measurement
+       */
 
-    for (k<-0 to K-1) {
-      // Update datasetWeights array.
-      val sumLikelihoods = gamma.aggregate(0.0)((acc:Double,v:Array[Double])=> acc + v(k),_+_)
-      //test_datasetWeights(k) = (gamma.aggregate(0.0)((acc:Double,v:Array[Double])=> acc + v(k),_+_))/ totalCount
-      test_datasetWeights(k) = sumLikelihoods / totalCount
-      // Update datasetMean array.
-      //test_datasetMean(k) = gamma.aggregate((0.0))
-      // Update datasetVariance array.
-    }
-
+      cLnp = lnp
+      lnp = X.aggregate(0.0)(logJointProbability, _ + _)
+      count += 1
+      println("Iteration: ", count)
+    } while((lnp - cLnp )> epsilon)
+//      count += 1
+//      println("Iteration: ", count)
+//    } while(count<10)
 
 
 
@@ -131,26 +162,22 @@ object GMM extends App {
 //    } while (true)
 
     //Debugging prints
-    println(X.toDebugString)
-    println("total count: ",totalCount)
-    println("dataset mean: ", mean)
-    println("dataset variance: ", variance)
-    println("Array: Samples for mean: ")
-    datasetMean.foreach(println)
-    println("Array: Initial weights: ")
-    datasetWeights.foreach(println)
-    println("Array:: dataset variance ")
-    datasetVariance.foreach(println)
-    println("logtest: ", lnp)
-    println("epsilon:", epsilon)
+
+
     println("weights_iter(1): ")
-    test_datasetWeights.foreach(println)
+    datasetWeights.foreach(println)
+    println("means_iter(1): ")
+    datasetMean.foreach(println)
+    println("variances_iter(1): ")
+    datasetVariance.foreach(println)
+
+    println(X.toDebugString)
     //println(test)
     //print("testi: ",testi)
     //sampler(X,totalCount,k)
     //test.foreach(println)
 
-    test.foreach(a => println(a(0),a(1),a(2),a(3))) //gamma data
+    //test.foreach(a => println(a(0),a(1),a(2),a(3))) //gamma data
   }
 
 
